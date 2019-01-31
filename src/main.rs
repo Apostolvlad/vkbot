@@ -4,47 +4,39 @@ extern crate rvk;
 extern crate serde_json;
 
 use std::io;
-
 use rvk::{methods::groups, objects::user::User, APIClient, Params};
-use serde_json::*;
+use serde_json::{from_value, Value};
+
+fn get_input<T>(text: T) -> String 
+    where T: std::string::ToString
+{
+    println!("{}", text.to_string());
+    let mut buf = String::new();
+    io::stdin().read_line(&mut buf).unwrap();
+    buf
+}
 
 fn main() {
-
-    let input = io::stdin();
-
-    let client_id_save = "6835330".to_string(); // если тут указан, вводить не надо, иначе тут пусто
-    let token_save = "".to_string(); // если тут указан токен, то вводить не надо, иначе тут пусто
-    println!("Введите свой client_id:");
-        let client_id = if client_id_save != ""{client_id_save}else{  // 6835330  
-            let mut buf = String::new();
-            input.read_line(&mut buf).unwrap();
-            buf
-        };
-
-    println!("И введите полученный access_token:"); 
-    let token = if token_save != "" {token_save}else{
-            let mut buf = String::new();
-            input.read_line(&mut buf).unwrap();
-            buf
-        };
+    let client_id_save = 6835330;
+    let client_id = get_input("Введите свой client_id:");
     let api_version: String = "5.92".to_string();
-
     println!("\nВставьте эту ссылку в браузер:\nhttps://oauth.vk.com/authorize?client_id={}&display=page&redirect_uri=https://oauth.vk.com/blank.html/callback&scope=friends&response_type=token&v={}\n",
     client_id.trim(), api_version);
-
-
+    // Getting input token
+    let token = get_input("И введите полученный access_token:");
+    
     // Create an API Client.
     let api = APIClient::new(token.trim().to_string()); //.
-
+    
     // Create a HashMap to store parameters.
     let mut count_offset = 0;
     let inc_offset = 10; // число на которое увеличивается оффсет, максимум = 1000
+    
     // статья с методами работы строк и векторов https://www.ibm.com/developerworks/ru/library/l-rust_11/index.html
     // url on get_members VK api: https://vk.com/dev/groups.getMembers\
     let mut params_groups = Params::new();
-
-        // Используется связка "поле + значение".
-
+    
+    // Используется связка "поле + значение".
     params_groups.insert("group_id".into(), "61440523".into());
     params_groups.insert("count".into(), "10".into());
     params_groups.insert("offset".into(), "0".to_string().into());
@@ -74,10 +66,9 @@ fn main() {
         };
         count_offset += inc_offset;
         params_groups.insert("offset".into(), count_offset.to_string().into());
+        
         // ограничение, для завершения цикла, так же нужна задержка, если убрать эту заслонку, дабы не забанили ор) от ддос атаки запросами
-        println!("Для продолжения введите 1:"); 
-        stop = "".to_string();
-        input.read_line(&mut stop).unwrap(); 
+        stop = get_input("Для продолжения введите 1:"); 
         println!("stop = {}", stop);
     };
 }
