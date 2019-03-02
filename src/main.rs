@@ -1,107 +1,137 @@
 //#![allow(dead_code, unused_imports)]
 
+extern crate chrono;
+extern crate open;
+extern crate rusqlite;
 extern crate rvk;
 extern crate serde_json;
-extern crate open;
 
-use std::io;
-use std::fs::OpenOptions;
-use rvk::{methods::groups, objects::user::User, APIClient, Params};
-use serde_json::{json, to_writer_pretty, from_value, Value, from_reader};
-use std::fs::File;
-use std::io::BufReader;
-use std::io::BufWriter;
-
-// Easy input function.
-fn get_input<T>(text: T) -> String 
-    where T: std::string::ToString
-{
-    println!("{}", text.to_string());
-    let mut buf = String::new();
-    io::stdin().read_line(&mut buf).unwrap();
-    buf.trim().to_string()
-}
-
-// JSON reader
-fn get_json_data(filename: &str) -> Value
-{
-    let file = File::open(filename).unwrap();
-    let reader = BufReader::new(file);
-    from_reader(reader).unwrap()
-}
+mod lib;
+use chrono::{NaiveDate, Utc};
+use lib::*;
+use rvk::{
+    error::Error::API,
+    methods::{friends::add, groups::get_members},
+    Params,
+};
+use serde_json::{from_value, json, Value};
 
 fn main() {
-    let mut data = get_json_data("login.json");
-    let f = OpenOptions::new().write(true).open("login.json").unwrap();
-    let w = BufWriter::new(f);
+    // First database for user storage.
+    let d = DB::new("add.db");
+    // Second databse for checked users.
+    let d2 = DB::new("check.db");
 
-    // Getting client_id's input.
-    let mut client_id = data["client_id"].as_str().unwrap().to_string();
-    if client_id == "" {
-		client_id = get_input("Введите свой client_id:");
-        data["client_id"] = json!(client_id);
-        to_writer_pretty(w, &data).unwrap();
-	};
+    // Current date.
+    let current_date: NaiveDate = Utc::today().naive_utc();
 
-    // VK API version.  
-    let api_version: String = "5.92".to_string();
-    let f = OpenOptions::new().write(true).open("login.json").unwrap();
-    let w = BufWriter::new(f);
-    // Getting token's input.
-    let mut token = data["token"].as_str().unwrap().to_string();
-    if token == "" {
-        let url = format!("https://oauth.vk.com/authorize?client_id={}&display=page&redirect_uri=https://oauth.vk.com/blank.html/callback&scope=friends&response_type=token&v={}",
-        client_id, api_version);  
-        open::that(url).unwrap();
-        token = get_input("Введите полученный access_token из открывшейся страницы:");
-        data["token"] = json!(token);
-        to_writer_pretty(w, &data).unwrap();
-    };
-    println!("token {}", token);
     // Create an API Client.
-    let api = APIClient::new(token.to_string());
-    
-    // Create a HashMap to store parameters.
-    let mut count_offset = 0;
-    let inc_offset = 10; // Default is 0, Max is 1000.
+    let api = get_api();
 
-    // URL on get_members VK api: https://vk.com/dev/groups.getMembers
-    let mut params_groups = Params::new();
-    
-    // Adding some "Key" + "Value" to our Hashmap.
-    params_groups.insert("group_id".into(), "61440523".into());
-    params_groups.insert("count".into(), "10".into());
-    params_groups.insert("offset".into(), "0".to_string().into());
-    params_groups.insert("fields".into(), "sex, city, bdate, is_closed".into());
-        
-    println!("\nПередаём следующие данные: {:?}\n", params_groups);
-    
-    let mut stop = "1".to_string(); // переменная остановки
-    while stop.trim() == "1" {
-        let members = groups::get_members(&api, params_groups.clone());
+    // Create a HashMap to store parameters.
+    let mut params_groups: Params = from_value(json!(
+        {
+            "group_id" : "53664217",
+            "sort" : "id_desc",
+            "count" : "1000",
+            "offset" : "0", // Don't change.
+            "fields" : "sex, city, bdate, can_send_friend_request"
+        }
+    ))
+    .unwrap();
+
+    println!("\nWe transfer the following data: {:?}", params_groups);
+
+    let mut stop = "1".to_string(); // "While"'s exit.
+    let mut offset = 0;
+    let mut count = 0;
+    let count_inc = 1000;
+    while stop == "1" && (count == 0 || offset < count) {
+        // URL on get_members VK API: https://vk.com/dev/groups.getMembers
+        let members = get_members(&api, params_groups.clone());
         match members {
             Ok(v) => {
+                // Our JSON data with array (items) of users.
                 let json_data: Value = from_value(v).unwrap();
-                //println!("{:?}\n", json_data);
-                let slice = json_data["items"].clone();
-                //println!("{:?}\n", slice);
-                let users: Vec<User> = from_value(slice).unwrap();
-                //println!("{:?}\n", users);
-                
-                for user in &users {
-                    println!(
-                        "User ID: {:?}\nName: {} {}\nBirthday: {:?}\nSex: {:?}\nCity: {:?}\n",
-                        user.id, user.first_name, user.last_name, user.bdate, user.sex, user.city 
-                    );
-                };
+                count = from_value(json_data["count"].clone()).unwrap();
+                println!("\nParse left: {}\n", count - offset);
+
+                // Our filter to get certain ids.
+                let items = json_data["items"].clone();
+                for i in 0..1000 {
+                    let user = items[i].clone();
+                    // Getting user's birthday.
+                    let date = user["bdate"].as_str().unwrap_or("").to_string();
+                    // Getting user's sex and location.
+                    if from_value(user["sex"].clone()).unwrap_or(0) == 1
+                        && from_value(user["city"]["id"].clone()).unwrap_or(0) == 1
+                        && from_value(user["can_send_friend_request"].clone()).unwrap_or(0) == 1
+                    {
+                        let date = NaiveDate::parse_from_str(&date, "%d.%m.%Y");
+                        match date {
+                            Ok(v) => {
+                                let result = (current_date - v).num_days() / 365;
+                                if result > 16 && result < 26 {
+                                    println!(
+                                        "{} {}, {} years old;",
+                                        user["first_name"].as_str().unwrap(),
+                                        user["last_name"].as_str().unwrap(),
+                                        result
+                                    );
+                                    d.add(from_value(user["id"].clone()).unwrap())
+                                }
+                            }
+                            Err(_) => {}
+                        };
+                    };
+                }
             }
-            Err(e) => println!("{}", e)
+            Err(e) => println!("{}", e),
         };
-        count_offset += inc_offset;
-        params_groups.insert("offset".into(), count_offset.to_string().into());
-        
-        // ограничение, для завершения цикла, так же нужна задержка, если убрать эту заслонку, дабы не забанили ор) от ддос атаки запросами
-        stop = get_input("Для продолжения введите 1:"); 
+        offset += count_inc;
+        if offset > count {
+            break;
+        }
+        params_groups.insert("offset".into(), offset.to_string().into());
+
+        // To exit from "While" or continue.
+        stop = get_input("\nTo continue type 1:");
         println!("stop = {}", stop);
-    };
+    }
+    println!("\nTotal users in DataBase: {}\n", d.len());
+
+    // This part is about sending friend requests with messages.
+    match get_input("Start send requests? 1 for Yes.").as_ref() {
+        "1" => {
+            for i in d.get_vec() {
+                let user_id = i;
+                if !d2.contains(user_id) {
+                    //let greetings_file = get_json_data("greetings.json");
+                    //let greetings = greetings_file["greetings"].clone();
+                    //let text = greetings[""].clone();
+                    let text = "Добрый день)";
+                    let mut params: Params = from_value(json!(
+                    {
+                        "user_id" : user_id.to_string(),
+                        "text" : text,
+                    }))
+                    .unwrap();
+                    let mut completed = false;
+                    while !completed {
+                        println!("\nDEBUG: {:?}", params);
+                        match add(&api, params.clone()) {
+                            Ok(_) => {
+                                d2.add(user_id);
+                                completed = true
+                            }
+                            Err(API(e)) => error_handler(e, &mut params),
+                            _ => {}
+                        }
+                        //sleep(Duration::from_secs(300));
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
 }
